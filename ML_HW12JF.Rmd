@@ -236,7 +236,7 @@ summary(nn_bag, standardize = T)
 
 mean(abs(summary(nn_bag, standardize = T)$sum.all[, 3][-1])) #Average Standardized Mean Difference-Unmatched
 
-# Matching attempt #1 Logistic Regression
+# Matching attempt Bagging
 mean(abs(summary(nn_bag, standardize = T)$sum.matched[, 3][-1])) 
 
 #Estimate and compare effects across algorithms
