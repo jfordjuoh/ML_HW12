@@ -1,0 +1,108 @@
+---
+title: "Untitled"
+output: word_document
+date: '2022-04-16'
+---
+
+```{r}
+library(MatchIt)
+library(randomForest)
+library(caret)
+library(tidyverse)
+
+library(glmnet)
+library(klaR)
+library(dplyr)
+library(readxl)
+library(knitr)
+```
+
+```{r}
+nmes_data <- read.delim("/Users/judyfordjuoh/Desktop/Machine Learning/nmes_data.txt")
+
+#Restrict to only needed variables
+keep.var<-c("LASTAGE", "MALE", "RACE3", "eversmk", "lc5", "beltuse", "educate", "marital", "SREGION", "POVSTALB")
+nmes.data<-nmes_data[,keep.var]
+
+#Inspect data summaries
+str(nmes.data)
+
+#Recode missings
+nmes.data[nmes.data=="."]<-NA
+
+#Change variable types where appropriate
+nmes.data$MALE <- as.factor(nmes.data$MALE)
+nmes.data$educate <- as.factor(nmes.data$educate)
+nmes.data$RACE3 <- as.factor(nmes.data$RACE3)
+nmes.data$eversmk<-as.factor(nmes.data$eversmk)
+nmes.data$SREGION <- as.factor(nmes.data$SREGION)
+nmes.data$lc5<-as.factor(nmes.data$lc5)
+nmes.data$beltuse<-as.factor(nmes.data$beltuse)
+nmes.data$marital<-as.factor(nmes.data$marital)
+
+nmes.data$POVSTALB<-factor(nmes.data$POVSTALB, order=TRUE)
+
+nmesdata<-na.omit(nmes.data)   
+```
+
+```{r}
+train.indices <- createDataPartition(y = nmesdata$eversmk,p = 0.7,list = FALSE)
+train.data <- nmesdata[train.indices, ]
+test.data <- nmesdata[-train.indices, ]
+```
+
+
+```{r LASSO}
+#LASSO
+#NTS: first create a grid to search lambda
+lambda <- 10^seq(-3,3, length = 100)
+
+set.seed(100)
+
+#NTS: replace tuneLength with tuneGrid and alpha is 1 because we are doing lasso. If we were doing rigid it would be 0. 
+lasso_m <- train(
+  eversmk ~ LASTAGE + MALE + educate + beltuse + POVSTALB + marital + RACE3 + SREGION, data = train.data, method = "glmnet", trControl = trainControl("cv", number = 10), preProc = c("center", "scale"), tuneGrid = expand.grid(alpha = 1, lambda = lambda)
+)
+
+#Print the values of alpha and lambda that gave best prediction
+lasso_m$bestTune %>% knitr::kable() # 1(alpha)|0.001(lambda)|0.6496 (Accuracy)
+
+#Print all of the options examined
+lasso_m$results %>% knitr::kable()
+
+# Model coefficients
+coef(lasso_m$finalModel, lasso_m$bestTune$lambda)
+
+#Confusion Matrix
+confusionMatrix(lasso_m) 
+```
+
+```{r PROPENSITY SCORE}
+prop.score <- (predict(lasso_m, train.data, type = "prob"))
+train.data$PS.LAS <- prop.score[,2]
+
+ggplot(data = train.data, aes(x = PS.LAS)) + geom_histogram() + facet_grid(~eversmk) + theme_bw() + ggtitle("Overlap PS from LASSO MODEL")
+```
+
+```{r MATCHING}
+nn <- matchit(eversmk ~ LASTAGE + MALE + educate + beltuse + POVSTALB + marital + RACE3 + SREGION, 
+                    data=train.data, distance=train.data$PS.LAS, method="nearest", discard="both", caliper=0.2, ratio=1)
+
+nn1.data <- match.data(nn)
+
+summary(nn, standardize=T)
+
+mean(abs(summary(nn, standardize=T)$sum.all[, 3][-1])) #Average Standardized Mean Difference-Unmatched
+    
+# Matching attempt #LASSO
+mean(abs(summary(nn, standardize=T)$sum.matched[, 3][-1])) 
+
+# Estimate and compare effects across algorithms
+outcome_model_lasso <- glm(lc5 ~ eversmk, data=nn1.data, family=binomial(link="logit"))
+    
+exp(outcome_model_lasso$coefficients)
+exp(confint(outcome_model_lasso))
+```
+
+
+
