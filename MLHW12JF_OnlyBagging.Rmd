@@ -1,0 +1,94 @@
+---
+title: "OnlyBagging_HW12JFML"
+output: word_document
+date: '2022-04-16'
+---
+
+Due to my R having issues with knitting the whole document (it takes a very very long time), I will be submitting the exercise portion only.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+library(MatchIt)
+library(randomForest)
+library(caret)
+library(tidyverse)
+```
+
+```{r data_prep}
+nmes_data <- read.delim("/Users/judyfordjuoh/Desktop/Machine Learning/nmes_data.txt")
+
+#Restrict to only needed variables
+keep.var <- c("LASTAGE", "MALE", "RACE3", "eversmk", "lc5", "beltuse", "educate", "marital", "SREGION", "POVSTALB")
+nmes.data <- nmes_data[,keep.var]
+
+#Inspect data summaries
+str(nmes.data)
+
+#Recode missings
+nmes.data[nmes.data == "."] <- NA
+
+#Change variable types where appropriate
+nmes.data$MALE <- as.factor(nmes.data$MALE)
+nmes.data$educate <- as.factor(nmes.data$educate)
+nmes.data$RACE3 <- as.factor(nmes.data$RACE3)
+nmes.data$eversmk <- as.factor(nmes.data$eversmk)
+nmes.data$SREGION <- as.factor(nmes.data$SREGION)
+nmes.data$lc5 <- as.factor(nmes.data$lc5)
+nmes.data$beltuse <- as.factor(nmes.data$beltuse)
+nmes.data$marital <- as.factor(nmes.data$marital)
+
+nmes.data$POVSTALB <- factor(nmes.data$POVSTALB, order = TRUE)
+
+nmesdata <- na.omit(nmes.data)    
+```
+
+### EXERCISE/HOMEWORK
+
+I have demonstrated how to utilize random forest and logistic regression in a propensity score analysis. Using the same data, use a different algorithm to construct the propensity scores. Compare your results to the above. Are they what you expected? 
+
+
+```{r BAGGING}
+set.seed(100)
+
+mtry_bag <- expand.grid(.mtry = ncol(nmesdata) - 1)
+
+bag_eversmk <- train(eversmk ~ LASTAGE + MALE + educate + beltuse + POVSTALB + marital + RACE3 + SREGION, data = nmesdata, method = "rf", metric = "Accuracy", tuneGrid = mtry_bag, ntree = 100)
+
+bag_eversmk$results
+varImp(bag_eversmk)
+plot(varImp(bag_eversmk))
+confusionMatrix(bag_eversmk) #Accuracy = 0.6079
+
+
+propscore_bag <- (predict(bag_eversmk, nmesdata, type = "prob"))
+nmesdata$PS.BAG <- propscore_bag[,2]
+```
+
+
+```{r}
+#Examine region of common support
+ggplot(data = nmesdata, aes(x = PS.BAG)) + geom_histogram() + facet_grid(~eversmk) + theme_bw() + ggtitle("Overlap PS from Bagging")
+
+#Match by propensity score in one to one matching and compare covariate balance and population size
+nn_bag <- matchit(eversmk ~ LASTAGE + MALE + educate + beltuse + POVSTALB + marital + RACE3 + SREGION, 
+                    data = nmesdata, distance = nmesdata$PS.BAG, method = "nearest", discard = "both", caliper = 0.2, ratio = 1)
+nn_bag.data <- match.data(nn_bag)
+summary(nn_bag, standardize = T)
+
+mean(abs(summary(nn_bag, standardize = T)$sum.all[, 3][-1])) #Average Standardized Mean Difference-Unmatched
+
+# Matching attempt Bagging
+mean(abs(summary(nn_bag, standardize = T)$sum.matched[, 3][-1])) 
+
+#Estimate and compare effects across algorithms
+outcomemodel_bag <- glm(lc5 ~ eversmk, data = nn_bag.data, family = binomial(link = "logit"))
+    
+exp(outcomemodel_bag$coefficients)
+exp(confint(outcomemodel_bag))
+```
+
+I expected that bagging would have a worse propensity score in comparison to random forest, which is what we did see in my analysis. I assumed this  because random forest are often better in predicting due to a better variance-bias trade off. The percent balance improvement was large in bagging with distance = 12.8 and lastage = 49.2, which were larger than the random forest and the logistic regression. The average standardized mean difference-unmatched( of the bagging method was 0.1177 and matching attempt was 0.0821.In the bagging method there were also more  participants who were not matched and discarded compared to the random forest and the logistic regression.
+
